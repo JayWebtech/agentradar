@@ -239,4 +239,6 @@ window.radar.onFlash(() => {
 });
 $('collapse').addEventListener('click', () => window.radar.toggleCollapsed());
 $('menu').addEventListener('click', () => window.radar.menu());
+$('dashboard').addEventListener('click', () => window.radar.openDashboard());
+window.radar.onSound((kind) => window.playRadarSound(kind));
 setInterval(tick, 1000);

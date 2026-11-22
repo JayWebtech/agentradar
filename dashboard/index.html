@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+  <title>Agent Radar — Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Dashboard</h1>
+    </div>
+    <div class="seg" id="period" role="tablist" aria-label="Time period">
+      <button data-p="today">Today</button>
+      <button data-p="7d" class="on">7 days</button>
+      <button data-p="30d">30 days</button>
+      <button data-p="all">All time</button>
+    </div>
+    <button class="ghost" id="clear">Clear history</button>
+  </header>
+
+  <main id="main">
+    <section class="kpis" id="kpis"></section>
+
+    <section class="grid">
+      <article class="panel">
+        <header><h2>Tasks finished</h2><div class="legend" id="lg-tasks"></div></header>
+        <div class="chart" id="ch-tasks"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Where the time went</h2><div class="legend" id="lg-time"></div></header>
+        <div class="chart" id="ch-time"></div>
+      </article>
+      <article class="panel">
+        <header><h2>How long tasks take</h2></header>
+        <div class="chart" id="ch-length"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Busiest projects</h2><span class="hint">agent time</span></header>
+        <div class="chart" id="ch-projects"></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <header><h2>Recent tasks</h2><span class="hint" id="recent-count"></span></header>
+      <div class="table-wrap">
+        <table id="recent">
+          <thead><tr><th>Finished</th><th>Agent</th><th>Project</th><th>Task</th><th class="num">Took</th><th class="num">Waited on you</th><th class="num">Steps</th><th>Result</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <section class="empty" id="empty" hidden>
+    <div class="empty-icon"></div>
+    <h2>No finished tasks yet</h2>
+    <p>Stats show up here as your agents complete tasks: how long they take, how long they wait on you, and which projects keep them busiest.</p>
+  </section>
+
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+  <script src="dashboard.js"></script>
+</body>
+</html>

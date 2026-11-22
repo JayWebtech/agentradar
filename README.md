@@ -18,6 +18,30 @@ When Claude Code asks permission for a command, edit or tool, the card shows **A
 
 Questions and plan approvals still need to be answered in the agent itself. For those, the card shows **Open to respond**.
 
+### Sounds
+- **Needs you:** a bright two-note chime.
+- **Task finished:** a soft three-note chime.
+- **Reminders:** if something is still waiting, it chimes again every 2 minutes, up to 3 times.
+
+Each of these can be switched on or off in **••• → Sounds**, which also has **Mute for 1 hour** and sound previews.
+
+### Dashboard
+Open it with the chart button on the widget, from **••• → Open dashboard**, or with **⌘⌥D** (Ctrl+Alt+D on Windows/Linux).
+
+It covers today, the last 7 days, the last 30 days or all time:
+- **Headline stats:** tasks finished, agent time, typical task length, your average response time, and approvals/denials made from the widget.
+- **Tasks finished per day** by agent.
+- **Where the time went:** time the agent was working vs. time it was waiting on you.
+- **How long tasks take:** a breakdown by length.
+- **Busiest projects.**
+- **Recent tasks:** a table of the latest tasks.
+
+The history is stored only on your computer, in `history.jsonl` in the app's data folder, and **Clear history** removes it.
+
+### Shortcuts
+- **⌘⌥R** / Ctrl+Alt+R: show or hide the widget
+- **⌘⌥D** / Ctrl+Alt+D: open the dashboard
+
 The widget floats above every window and every Space, including full-screen apps. Drag it anywhere and it remembers where you left it. Use the chevron to collapse it to a single line, and the `•••` button for options (sound, notify on finish, launch at login).
 
 ## Setup

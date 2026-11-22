@@ -36,7 +36,9 @@
       "lib/**",
       "hooks/**",
       "assets/**",
-      "package.json"
+      "package.json",
+      "dashboard/**",
+      "preload-dashboard.js"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

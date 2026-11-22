@@ -3,12 +3,13 @@
 // (Claude Code, Cursor, Antigravity, or anything that can POST JSON) and
 // shows what each session is doing and when it needs you.
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, Notification, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, Notification, nativeImage, dialog, globalShortcut } = require('electron');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const hooks = require('./lib/hooks');
+const { History } = require('./lib/history');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_LINUX = process.platform === 'linux';
@@ -16,12 +17,17 @@ const IS_LINUX = process.platform === 'linux';
 // Linux compositors need this for transparent windows
 if (IS_LINUX) app.commandLine.appendSwitch('enable-transparent-visuals');
 
+// For testing: keep settings + history in a separate folder
+if (process.env.AGENT_RADAR_DATA_DIR) app.setPath('userData', process.env.AGENT_RADAR_DATA_DIR);
+
 const PORT = Number(process.env.AGENT_RADAR_PORT || 47321);
 const WIDTH = 372; // includes 16px transparent margin for the CSS shadow
 const STALE_MS = 15 * 60 * 1000; // a "working" session silent this long is shown as idle
 const DONE_TTL_MS = 60 * 60 * 1000; // finished sessions drop off after an hour
 
 let win = null;
+let dash = null; // analytics dashboard window
+let history = null;
 let tray = null;
 const sessions = new Map(); // key -> session
 const pending = new Map();  // key -> { res, id } : a PermissionRequest hook waiting for Approve / Deny
@@ -43,9 +49,19 @@ function resolvePending(key, decision) {
 
 // ---------------------------------------------------------------- settings
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { x: null, y: null, collapsed: false, notifyDone: true, sound: true, askedSetup: false };
+let settings = {
+  x: null, y: null, collapsed: false, notifyDone: true, askedSetup: false,
+  soundNeeds: true,   // chime when an agent needs you
+  soundDone: true,    // softer chime when a task finishes
+  reminders: true,    // re-chime every 2 min (up to 3x) while something is still waiting
+  mutedUntil: 0,      // "Mute for 1 hour"
+};
+const REMIND_EVERY_MS = 2 * 60 * 1000;
+const MAX_REMINDERS = 3;
 function loadSettings() {
   try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))); } catch {}
+  // older versions had a single "sound" switch
+  if (settings.sound === false) { settings.soundNeeds = false; settings.soundDone = false; delete settings.sound; }
 }
 function saveSettings() {
   try { fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2)); } catch {}
@@ -208,9 +224,47 @@ function applyEvent(source, body, meta) {
       if (body.message) s.detail = truncate(body.message, 120);
   }
 
+  trackRun(s, prev, ev, body, now);
   if (s.status !== prev || ev === 'PermissionRequest') onStatusChange(s, prev);
   broadcast();
   return s;
+}
+
+// ---------------------------------------------------------------- task history
+// One "run" = one prompt → finish cycle. We time it, and separately time how long it sat
+// waiting on you, so the dashboard can show agent time vs. your response time.
+function trackRun(s, prev, ev, body, now) {
+  const started = ev === 'UserPromptSubmit' || ev === 'beforeSubmitPrompt'
+    || (!ev && body.status === 'working' && prev !== 'working' && !s.run);
+  if (started) {
+    if (s.run) finishRun(s, 'interrupted', now);
+    s.run = { startedAt: now, prompt: s.prompt || body.message || '', waitMs: 0, waits: 0, waitStart: null, approvals: 0, denials: 0 };
+  }
+  if (!s.run) return;
+  if (s.status === 'needs_input' && prev !== 'needs_input') { s.run.waits++; s.run.waitStart = now; }
+  if (prev === 'needs_input' && s.status !== 'needs_input') endWait(s, now);
+  if (s.status === 'done' && prev !== 'done') {
+    finishRun(s, ev === 'StopFailure' ? 'error' : body.status === 'aborted' ? 'stopped' : 'done', now);
+  }
+}
+
+function endWait(s, now) {
+  if (s.run && s.run.waitStart) { s.run.waitMs += now - s.run.waitStart; s.run.waitStart = null; }
+}
+
+function finishRun(s, outcome, now) {
+  const r = s.run;
+  if (!r) return;
+  endWait(s, now);
+  s.run = null;
+  history.append({
+    id: `${s.key}:${r.startedAt}`,
+    source: s.source, project: s.project, prompt: r.prompt,
+    startedAt: r.startedAt, endedAt: now, durationMs: now - r.startedAt,
+    waitMs: r.waitMs, waits: r.waits, tools: s.tools || 0,
+    approvals: r.approvals, denials: r.denials, outcome,
+  });
+  if (dash && !dash.isDestroyed()) dash.webContents.send('history', history.all());
 }
 
 function toolTitle(name) {
@@ -227,12 +281,15 @@ function permissionText(name, input = {}) {
 }
 
 function onStatusChange(s, prev) {
+  if (s.status === 'needs_input' && prev !== 'needs_input') { s.waitingSince = Date.now(); s.reminded = 0; }
   if (s.status === 'needs_input') {
+    playSound('needs');
     notify(`${label(s.source)} needs you · ${s.project}`, s.ask?.text || s.ask?.title || 'Waiting for input', s);
     if (win) { win.showInactive(); win.moveTop(); }
     if (settings.collapsed && win) win.webContents.send('flash');
-  } else if (s.status === 'done' && prev === 'working' && settings.notifyDone) {
-    notify(`${label(s.source)} finished · ${s.project}`, s.prompt || 'Task complete', s);
+  } else if (s.status === 'done' && prev === 'working') {
+    playSound('done');
+    if (settings.notifyDone) notify(`${label(s.source)} finished · ${s.project}`, s.prompt || 'Task complete', s);
   }
   updateTray();
 }
@@ -243,9 +300,37 @@ function label(source) {
 
 function notify(title, body, s) {
   if (!Notification.isSupported()) return;
-  const n = new Notification({ title, body: truncate(body, 180), silent: !settings.sound });
+  // always silent: Agent Radar plays its own sounds (see playSound)
+  const n = new Notification({ title, body: truncate(body, 180), silent: true });
   n.on('click', () => focusSession(s.key));
   n.show();
+}
+
+const isMuted = () => Date.now() < (settings.mutedUntil || 0);
+
+// kind: 'needs' | 'done' | 'reminder'. The widget window synthesises the sound (renderer/sounds.js).
+function playSound(kind, force = false) {
+  if (!force) {
+    if (isMuted()) return;
+    if ((kind === 'needs' || kind === 'reminder') && !settings.soundNeeds) return;
+    if (kind === 'done' && !settings.soundDone) return;
+  }
+  if (win && !win.isDestroyed()) win.webContents.send('sound', kind);
+}
+
+// Nudge again if something has been waiting a while
+function checkReminders() {
+  if (!settings.reminders) return;
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    if (s.status !== 'needs_input' || !s.waitingSince) continue;
+    if (s.reminded >= MAX_REMINDERS) continue;
+    if (now - s.waitingSince >= REMIND_EVERY_MS * (s.reminded + 1)) {
+      s.reminded++;
+      playSound('reminder');
+      if (win) { win.showInactive(); win.webContents.send('flash'); }
+    }
+  }
 }
 
 function focusSession(key) {
@@ -285,6 +370,12 @@ function startServer() {
       return win.webContents.capturePage().then((img) => {
         res.writeHead(200, { 'content-type': 'image/png' }); res.end(img.toPNG());
       });
+    }
+    if (process.env.AGENT_RADAR_DEBUG && req.method === 'GET' && req.url === '/debug/dash.png') {
+      openDashboard();
+      return setTimeout(() => dash.webContents.capturePage().then((img) => {
+        res.writeHead(200, { 'content-type': 'image/png' }); res.end(img.toPNG());
+      }), 1500);
     }
     if (process.env.AGENT_RADAR_DEBUG && req.method === 'GET' && req.url.startsWith('/debug/click') && win) {
       const sel = new URL(req.url, 'http://x').searchParams.get('sel');
@@ -359,6 +450,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      autoplayPolicy: 'no-user-gesture-required', // so alert sounds play without a click first
     },
   });
   win.setAlwaysOnTop(true, 'floating');
@@ -391,6 +483,8 @@ ipcMain.on('decide', (_e, key, decision) => {
   const s = sessions.get(key);
   if (!resolvePending(key, decision)) return;
   if (s) {
+    if (s.run) { if (decision === 'allow') s.run.approvals++; if (decision === 'deny') s.run.denials++; }
+    endWait(s, Date.now());
     s.ask = null;
     s.status = 'working';
     s.detail = decision === 'allow' ? 'Approved from Agent Radar' : decision === 'deny' ? 'Denied from Agent Radar' : s.detail;
@@ -434,10 +528,11 @@ function buildMenu() {
       win.setPosition(workArea.x + workArea.width - WIDTH, workArea.y);
     } },
     { type: 'separator' },
+    { label: 'Open dashboard', accelerator: 'CommandOrControl+Alt+D', click: openDashboard },
+    { type: 'separator' },
     { label: 'Notify when a task finishes', type: 'checkbox', checked: settings.notifyDone,
       click: (i) => { settings.notifyDone = i.checked; saveSettings(); } },
-    { label: 'Play sound', type: 'checkbox', checked: settings.sound,
-      click: (i) => { settings.sound = i.checked; saveSettings(); } },
+    { label: 'Sounds', submenu: soundMenu() },
     ...(IS_LINUX ? [] : [{ label: 'Launch at login', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
       click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) }]),
     { type: 'separator' },
@@ -447,6 +542,55 @@ function buildMenu() {
     { label: 'Quit Agent Radar', role: 'quit' },
   ]);
 }
+
+function soundMenu() {
+  const muted = isMuted();
+  const until = new Date(settings.mutedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const toggle = (k) => (i) => { settings[k] = i.checked; saveSettings(); };
+  return [
+    { label: 'When an agent needs you', type: 'checkbox', checked: settings.soundNeeds, click: toggle('soundNeeds') },
+    { label: 'When a task finishes', type: 'checkbox', checked: settings.soundDone, click: toggle('soundDone') },
+    { label: 'Remind me while it keeps waiting', type: 'checkbox', checked: settings.reminders, click: toggle('reminders') },
+    { type: 'separator' },
+    muted
+      ? { label: `Unmute (muted until ${until})`, click: () => { settings.mutedUntil = 0; saveSettings(); } }
+      : { label: 'Mute for 1 hour', click: () => { settings.mutedUntil = Date.now() + 3600e3; saveSettings(); } },
+    { type: 'separator' },
+    { label: 'Preview "needs you" sound', click: () => playSound('needs', true) },
+    { label: 'Preview "finished" sound', click: () => playSound('done', true) },
+  ];
+}
+
+// ---------------------------------------------------------------- dashboard
+function openDashboard() {
+  if (dash && !dash.isDestroyed()) { dash.show(); dash.focus(); return; }
+  dash = new BrowserWindow({
+    width: 1180, height: 820, minWidth: 860, minHeight: 600,
+    title: 'Agent Radar — Dashboard',
+    backgroundColor: '#0b0c10',
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: { preload: path.join(__dirname, 'preload-dashboard.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  dash.loadFile(path.join(__dirname, 'dashboard', 'index.html'));
+  dash.once('ready-to-show', () => dash.show());
+  // a regular window: give it a Dock icon / taskbar entry while it's open
+  if (IS_MAC) { app.dock.show(); dash.on('closed', () => { dash = null; app.dock.hide(); }); }
+  else dash.on('closed', () => { dash = null; });
+}
+
+ipcMain.handle('history:get', () => history.all());
+ipcMain.handle('history:clear', async () => {
+  const { response } = await dialog.showMessageBox(dash, {
+    type: 'warning', buttons: ['Clear history', 'Cancel'], defaultId: 1, cancelId: 1,
+    message: 'Clear all task history?', detail: 'This permanently deletes the stats shown in the dashboard. It cannot be undone.',
+  });
+  if (response !== 0) return false;
+  history.clear();
+  return true;
+});
+ipcMain.on('open-dashboard', openDashboard);
 
 // ---------------------------------------------------------------- agent hooks
 function connectMenu() {
@@ -505,6 +649,7 @@ if (!app.requestSingleInstanceLock()) {
     if (IS_MAC) app.dock.hide();
     if (process.platform === 'win32') app.setAppUserModelId('com.agentradar.app'); // needed for notifications
     loadSettings();
+    history = new History(app.getPath('userData'));
     startServer();
     createWindow();
     tray = new Tray(trayIcon());
@@ -513,6 +658,11 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(offerSetup, 1500);
     // refresh relative times + staleness
     setInterval(broadcast, 15 * 1000);
+    setInterval(checkReminders, 15 * 1000);
+    // global shortcuts: show/hide the widget, open the dashboard
+    globalShortcut.register('CommandOrControl+Alt+R', () => (win.isVisible() ? win.hide() : win.showInactive()));
+    globalShortcut.register('CommandOrControl+Alt+D', openDashboard);
   });
   app.on('window-all-closed', (e) => e.preventDefault());
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 }
