@@ -81,7 +81,7 @@ The tag must match the version in `package.json`, or the workflow stops with an 
 
 ### Code signing (optional)
 Without signing, the apps still build and work, but:
-- **macOS** says the app "can't be opened" or "is damaged". Right-click → **Open**, or run `xattr -dr com.apple.quarantine "/Applications/Agent Radar.app"` once.
+- **macOS** says the app is from an unidentified developer. The build is ad-hoc signed (see `scripts/adhoc-sign.js`), so right-click → **Open** once is enough. If macOS still blocks it, run `xattr -dr com.apple.quarantine "/Applications/Agent Radar.app"`.
 - **Windows** SmartScreen warns about an unknown publisher. Click **More info → Run anyway**.
 
 To sign, add these repository secrets (Settings → Secrets and variables → Actions):

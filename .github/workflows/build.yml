@@ -45,18 +45,32 @@ jobs:
 
       - name: Build installers
         shell: bash
-        run: npx electron-builder ${{ matrix.flag }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        run: |
+          # Signing is optional. GitHub passes unset secrets as empty strings, and electron-builder
+          # treats an empty CSC_LINK as a (bad) file path, so only export what is actually set.
+          set_if() { if [ -n "$2" ]; then export "$1=$2"; fi; }
+          set_if CSC_LINK "$MAC_CERT"
+          set_if CSC_KEY_PASSWORD "$MAC_CERT_PASSWORD"
+          set_if APPLE_ID "$APPLE_ID_SECRET"
+          set_if APPLE_APP_SPECIFIC_PASSWORD "$APPLE_PASSWORD_SECRET"
+          set_if APPLE_TEAM_ID "$APPLE_TEAM_SECRET"
+          set_if WIN_CSC_LINK "$WIN_CERT"
+          set_if WIN_CSC_KEY_PASSWORD "$WIN_CERT_PASSWORD"
+          if [ -z "$MAC_CERT" ] && [ -z "$WIN_CERT" ]; then
+            echo "No signing certificates configured — building unsigned apps."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npx electron-builder ${{ matrix.flag }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional macOS signing + notarization. Leave these secrets unset to build unsigned apps.
-          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Optional Windows signing
-          WIN_CSC_LINK: ${{ secrets.WIN_CERTIFICATE_PFX_BASE64 }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+          # Optional signing + notarization secrets (see README → Code signing)
+          MAC_CERT: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CERT: ${{ secrets.WIN_CERTIFICATE_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
 
       - uses: actions/upload-artifact@v4
         with:
