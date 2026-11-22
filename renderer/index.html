@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+  <title>Agent Radar</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="widget" class="widget">
+    <header class="bar">
+      <div class="radar" id="radar" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" class="ring" />
+          <circle cx="12" cy="12" r="5.5" class="ring" />
+          <path d="M12 12 L12 2 A10 10 0 0 1 21.5 9 Z" class="sweep" />
+          <circle cx="12" cy="12" r="1.6" class="core" />
+        </svg>
+      </div>
+      <div class="title">
+        <span class="name">Agent Radar</span>
+        <span class="summary" id="summary">Listening…</span>
+      </div>
+      <button class="icon" id="collapse" title="Collapse" aria-label="Collapse or expand">
+        <svg viewBox="0 0 16 16"><path d="M4 10l4-4 4 4" /></svg>
+      </button>
+      <button class="icon" id="menu" title="Options" aria-label="Options">
+        <svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg>
+      </button>
+    </header>
+    <section class="list" id="list"></section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
