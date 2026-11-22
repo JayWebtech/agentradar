@@ -1,3 +1,5 @@
+[![Fund my work on FLOSSAfrica](https://flossafrica.com/badge.svg?theme=dark)](https://flossafrica.com/m/jaywebtech?p=agentradar)
+
 # Agent Radar
 
 A small always-on-top widget for macOS that shows what your coding agents are doing, and lets you know the moment one of them needs you.
