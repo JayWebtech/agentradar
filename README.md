@@ -1,4 +1,4 @@
-[![Fund my work on FLOSSAfrica](https://flossafrica.com/badge.svg?theme=dark)](https://flossafrica.com/m/jaywebtech?p=agentradar)
+[![Fund my work on FLOSSAfrica](https://flossafrica.com/badge.svg?theme=light)](https://flossafrica.com/m/jaywebtech?p=agentradar)
 
 # Agent Radar
 
