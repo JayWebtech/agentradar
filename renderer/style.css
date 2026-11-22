@@ -54,9 +54,10 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
     0 4px 12px rgba(0, 0, 0, 0.35),
     0 0 0 0.5px rgba(0, 0, 0, 0.6);
   overflow: hidden;
-  transition: border-radius .3s ease;
+  transition: border-radius .34s cubic-bezier(.2,.8,.2,1);
 }
-.island.collapsed { border-radius: 999px; }
+/* 48px tall when collapsed, so 24px is an exact pill — no oversized radius mid-animation */
+.island.collapsed { border-radius: 24px; }
 
 /* soft colored glow along the top edge reflecting the overall mood */
 .island::before {
@@ -79,7 +80,10 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   height: 56px; padding: 0 10px 0 14px;
   -webkit-app-region: drag;
 }
+.head { transition: height .34s cubic-bezier(.2,.8,.2,1), padding .34s cubic-bezier(.2,.8,.2,1); }
 .collapsed .head { height: 48px; padding-left: 9px; }
+.head-text.swap { animation: swap .28s ease both; }
+@keyframes swap { from { opacity: 0; transform: translateY(3px); } }
 .head button { -webkit-app-region: no-drag; }
 
 .head-text { flex: 1; min-width: 0; }
@@ -144,7 +148,15 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   display: flex; flex-direction: column; gap: 6px;
   padding: 0 8px 8px; max-height: 560px; overflow-y: auto;
 }
-.collapsed .list { display: none; }
+/* height animates via grid rows 1fr <-> 0fr, so content slides instead of popping */
+.list-wrap {
+  display: grid; grid-template-rows: 1fr;
+  transition: grid-template-rows .34s cubic-bezier(.2,.8,.2,1), opacity .22s ease;
+}
+.list-wrap > .list { min-height: 0; }
+.collapsed .list-wrap { grid-template-rows: 0fr; opacity: 0; }
+.list { transition: padding .34s cubic-bezier(.2,.8,.2,1); }
+.collapsed .list { overflow: hidden; padding-bottom: 0; }
 .list::-webkit-scrollbar { width: 0; }
 
 .empty {

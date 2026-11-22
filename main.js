@@ -3,11 +3,18 @@
 // (Claude Code, Cursor, Antigravity, or anything that can POST JSON) and
 // shows what each session is doing and when it needs you.
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, Notification, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, Notification, nativeImage, dialog } = require('electron');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const hooks = require('./lib/hooks');
+
+const IS_MAC = process.platform === 'darwin';
+const IS_LINUX = process.platform === 'linux';
+
+// Linux compositors need this for transparent windows
+if (IS_LINUX) app.commandLine.appendSwitch('enable-transparent-visuals');
 
 const PORT = Number(process.env.AGENT_RADAR_PORT || 47321);
 const WIDTH = 372; // includes 16px transparent margin for the CSS shadow
@@ -36,7 +43,7 @@ function resolvePending(key, decision) {
 
 // ---------------------------------------------------------------- settings
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { x: null, y: null, collapsed: false, notifyDone: true, sound: true };
+let settings = { x: null, y: null, collapsed: false, notifyDone: true, sound: true, askedSetup: false };
 function loadSettings() {
   try { Object.assign(settings, JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))); } catch {}
 }
@@ -244,6 +251,8 @@ function notify(title, body, s) {
 function focusSession(key) {
   const s = sessions.get(key);
   if (!s) return;
+  // Jumping to the agent's app is macOS-only for now (it uses the app's bundle id)
+  if (!IS_MAC) return;
   const bundle = s.bundleId || SOURCE_APPS[s.source];
   if (bundle) execFile('open', ['-b', bundle], () => {});
 }
@@ -400,9 +409,11 @@ ipcMain.on('toggle-collapsed', () => {
 ipcMain.on('menu', () => buildMenu().popup({ window: win }));
 
 // ---------------------------------------------------------------- tray
-function trayIcon(alert) {
-  // Tiny template image drawn as SVG -> PNG data URL isn't supported directly, so use a dot glyph title instead.
-  return nativeImage.createEmpty();
+function trayIcon() {
+  // macOS: black template image that adapts to light/dark menu bars. Windows / Linux: light glyph.
+  const img = nativeImage.createFromPath(path.join(__dirname, 'assets', IS_MAC ? 'trayTemplate.png' : 'tray.png'));
+  if (IS_MAC) img.setTemplateImage(true);
+  return img;
 }
 
 function updateTray() {
@@ -410,7 +421,7 @@ function updateTray() {
   const list = [...sessions.values()];
   const waiting = list.filter((s) => s.status === 'needs_input').length;
   const working = list.filter((s) => s.status === 'working').length;
-  tray.setTitle(waiting ? ` ◉ ${waiting}` : working ? ` ◎ ${working}` : ' ◌');
+  if (IS_MAC) tray.setTitle(waiting ? ` ${waiting}` : working ? ` ${working}` : '');
   tray.setToolTip(`Agent Radar — ${working} working, ${waiting} waiting for you`);
 }
 
@@ -427,14 +438,62 @@ function buildMenu() {
       click: (i) => { settings.notifyDone = i.checked; saveSettings(); } },
     { label: 'Play sound', type: 'checkbox', checked: settings.sound,
       click: (i) => { settings.sound = i.checked; saveSettings(); } },
-    { label: 'Launch at login', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
-      click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) },
+    ...(IS_LINUX ? [] : [{ label: 'Launch at login', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
+      click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) }]),
     { type: 'separator' },
+    { label: 'Connect agents', submenu: connectMenu() },
     { label: 'Clear finished sessions', click: () => ipcMain.emit('clear-done') },
-    { label: 'Setup guide…', click: () => shell.openPath(path.join(__dirname, 'README.md')) },
     { type: 'separator' },
     { label: 'Quit Agent Radar', role: 'quit' },
   ]);
+}
+
+// ---------------------------------------------------------------- agent hooks
+function connectMenu() {
+  let st = {};
+  try { st = hooks.status(); } catch {}
+  const connected = st.claude || st.cursor;
+  return [
+    { label: connected ? `Connected: ${[st.claude && 'Claude Code', st.cursor && 'Cursor'].filter(Boolean).join(', ')}` : 'Not connected yet', enabled: false },
+    { label: connected ? 'Reinstall hooks' : 'Connect Claude Code & Cursor…', click: () => runInstall({}) },
+    { label: 'Also report from Antigravity', type: 'checkbox', checked: !!st.antigravity,
+      click: (i) => runInstall({ antigravity: i.checked }) },
+    { type: 'separator' },
+    { label: 'Disconnect all agents', enabled: !!(connected || st.antigravity), click: () => runInstall({ uninstall: true }) },
+  ];
+}
+
+function runInstall(opts) {
+  try {
+    const st = hooks.status();
+    const log = hooks.installHooks({ antigravity: opts.antigravity ?? st.antigravity, ...opts });
+    dialog.showMessageBox({
+      type: 'info',
+      message: opts.uninstall ? 'Agent Radar disconnected' : 'Agent Radar connected',
+      detail: log.join('\n') + (opts.uninstall ? '' : '\n\nRestart any open agent sessions so they pick up the hooks.'),
+    });
+  } catch (e) {
+    dialog.showErrorBox('Agent Radar', `Could not update agent settings:\n${e.message}`);
+  }
+}
+
+// First launch: offer to connect, since a downloaded app has no `npm run install-hooks`
+async function offerSetup() {
+  if (settings.askedSetup) return;
+  let st;
+  try { st = hooks.status(); } catch { return; }
+  settings.askedSetup = true; saveSettings();
+  if (st.claude || st.cursor || !(st.claudeFound || st.cursorFound)) return;
+  const found = [st.claudeFound && 'Claude Code', st.cursorFound && 'Cursor'].filter(Boolean).join(' and ');
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Connect', 'Not now'],
+    defaultId: 0, cancelId: 1,
+    message: `Connect Agent Radar to ${found}?`,
+    detail: `This adds hooks to your ${found} settings so the widget can show progress and approval requests. `
+      + 'Your current settings are backed up first, and you can disconnect anytime from the ••• menu → Connect agents.',
+  });
+  if (response === 0) runInstall({});
 }
 
 // ---------------------------------------------------------------- lifecycle
@@ -443,13 +502,15 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => win && win.showInactive());
   app.whenReady().then(() => {
-    if (process.platform === 'darwin') app.dock.hide();
+    if (IS_MAC) app.dock.hide();
+    if (process.platform === 'win32') app.setAppUserModelId('com.agentradar.app'); // needed for notifications
     loadSettings();
     startServer();
     createWindow();
     tray = new Tray(trayIcon());
     tray.on('click', () => tray.popUpContextMenu(buildMenu()));
     updateTray();
+    setTimeout(offerSetup, 1500);
     // refresh relative times + staleness
     setInterval(broadcast, 15 * 1000);
   });

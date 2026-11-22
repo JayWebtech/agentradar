@@ -4,6 +4,7 @@ const frame = $('frame');
 const list = $('list');
 const headline = $('headline');
 const sub = $('sub');
+const headText = $('headText');
 
 const SRC = {
   claude: { name: 'Claude', glyph: 'M8 1.5l1.2 4.1L13 4l-2.4 3.4L14.5 9l-4.1.4L11 13.6 8 10.6l-3 3 .6-4.2L1.5 9l3.9-1.6L3 4l3.8 1.6z' },
@@ -16,6 +17,10 @@ const srcName = (s) => (SRC[s] || { name: s }).name;
 
 let state = { sessions: [], now: Date.now(), collapsed: false };
 let skew = 0;
+let shownCollapsed = null; // what the DOM currently shows
+let animating = false;
+const MAX_LIST = 560;
+const FRAME_PAD = 14 + 22; // .frame top + bottom padding
 const seen = new Set();
 
 // ----------------------------------------------------------- helpers
@@ -74,8 +79,9 @@ function render() {
   const mood = waiting.length ? 'waiting' : working.length ? 'working' : done.length ? 'done' : 'idle';
 
   widget.dataset.mood = mood;
-  widget.classList.toggle('collapsed', collapsed);
+  const modeChanged = shownCollapsed !== null && shownCollapsed !== collapsed;
   renderHeader({ sessions, waiting, working, done, collapsed });
+  if (modeChanged) { headText.classList.remove('swap'); void headText.offsetWidth; headText.classList.add('swap'); }
 
   const cards = sessions.map((s) => card(s));
   if (!sessions.length) {
@@ -86,7 +92,28 @@ function render() {
   list.replaceChildren(...cards);
   for (const s of sessions) seen.add(s.key);
 
-  requestAnimationFrame(() => window.radar.resize(frame.getBoundingClientRect().height));
+  if (modeChanged) toggleMode(collapsed);
+  else {
+    widget.classList.toggle('collapsed', collapsed);
+    shownCollapsed = collapsed;
+    if (!animating) requestAnimationFrame(fitWindow);
+  }
+}
+
+function fitWindow() { window.radar.resize(frame.getBoundingClientRect().height); }
+
+// Resizing a native window every frame is janky, so: grow the (transparent) window to the
+// final size first, let CSS animate the card, and only shrink the window once it has finished.
+function toggleMode(collapsed) {
+  animating = true;
+  shownCollapsed = collapsed;
+  if (!collapsed) {
+    const expanded = FRAME_PAD + 56 + Math.min(list.scrollHeight, MAX_LIST);
+    window.radar.resize(expanded);
+  }
+  requestAnimationFrame(() => widget.classList.toggle('collapsed', collapsed));
+  clearTimeout(toggleMode.t);
+  toggleMode.t = setTimeout(() => { animating = false; fitWindow(); }, 380);
 }
 
 function renderHeader({ sessions, waiting, working, done, collapsed }) {
