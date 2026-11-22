@@ -5,7 +5,8 @@ contextBridge.exposeInMainWorld('radar', {
   onFlash: (cb) => ipcRenderer.on('flash', () => cb()),
   resize: (h) => ipcRenderer.send('resize', h),
   focus: (key) => ipcRenderer.send('focus-session', key),
-  dismiss: (key) => ipcRenderer.send('dismiss', key),
+  decide: (key, decision) => ipcRenderer.send('decide', key, decision),
+  dismiss:(key) => ipcRenderer.send('dismiss', key),
   toggleCollapsed: () => ipcRenderer.send('toggle-collapsed'),
   menu: () => ipcRenderer.send('menu'),
 });

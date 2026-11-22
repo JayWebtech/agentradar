@@ -20,6 +20,17 @@ if [ "$1" = "notify" ]; then
   exit 0
 fi
 
+# Permission request: wait for Approve / Deny in the widget and hand the answer back to the agent.
+# If the widget isn't running (or you answer in the agent instead), nothing is printed and the
+# agent shows its normal permission prompt.
+if [ "$1" = "claude-permission" ]; then
+  curl -s -m "${AGENT_RADAR_WAIT:-590}" -X POST \
+    -H "Content-Type: application/json" -H "X-Agent-Source: claude" \
+    -H "X-Bundle-Id: ${__CFBundleIdentifier:-}" \
+    --data-binary @- "http://127.0.0.1:$PORT/permission" 2>/dev/null
+  exit 0
+fi
+
 SRC="${1:-agent}"
 curl -s -m 1 -o /dev/null -X POST \
   -H "Content-Type: application/json" -H "X-Agent-Source: $SRC" \

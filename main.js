@@ -10,13 +10,29 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 
 const PORT = Number(process.env.AGENT_RADAR_PORT || 47321);
-const WIDTH = 320;
+const WIDTH = 372; // includes 16px transparent margin for the CSS shadow
 const STALE_MS = 15 * 60 * 1000; // a "working" session silent this long is shown as idle
 const DONE_TTL_MS = 60 * 60 * 1000; // finished sessions drop off after an hour
 
 let win = null;
 let tray = null;
 const sessions = new Map(); // key -> session
+const pending = new Map();  // key -> { res, id } : a PermissionRequest hook waiting for Approve / Deny
+let askSeq = 0;
+
+// Answer a waiting PermissionRequest hook. decision: 'allow' | 'deny' | null (let the agent ask normally)
+function resolvePending(key, decision) {
+  const p = pending.get(key);
+  if (!p) return false;
+  pending.delete(key);
+  let out = {};
+  if (decision === 'allow') out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+  if (decision === 'deny') out = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'The user denied this from Agent Radar.' } } };
+  try { p.res.writeHead(200, { 'content-type': 'application/json' }); p.res.end(JSON.stringify(out)); } catch {}
+  const s = sessions.get(key);
+  if (s && s.ask && s.ask.id === p.id) s.ask.actionable = false;
+  return true;
+}
 
 // ---------------------------------------------------------------- settings
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
@@ -96,6 +112,8 @@ function applyEvent(source, body, meta) {
 
   const prev = s.status;
   const ev = body.hook_event_name || body.event || '';
+  // Any new activity means the request was answered elsewhere (e.g. in the terminal)
+  if (pending.has(key) && !['PermissionRequest', 'Notification'].includes(ev)) resolvePending(key, null);
 
   // Generic API: { status: "working" | "needs_input" | "done" | "idle", message }
   if (!ev && body.status) {
@@ -141,8 +159,10 @@ function applyEvent(source, body, meta) {
     case 'PermissionRequest':
       s.status = 'needs_input';
       s.ask = {
-        title: `Allow ${body.tool_name || 'action'}?`,
-        text: describeTool(body.tool_name, body.tool_input).replace(/^Running: /, '$ '),
+        id: ++askSeq,
+        title: `Allow ${toolTitle(body.tool_name)}?`,
+        text: permissionText(body.tool_name, body.tool_input),
+        actionable: !!meta.actionable,
       };
       break;
     case 'Notification': {
@@ -169,7 +189,7 @@ function applyEvent(source, body, meta) {
     case 'SessionEnd':
       // keep finished work visible as "Done"; drop sessions that ended without finishing anything
       if (prev === 'done') break;
-      sessions.delete(key); broadcast(); return;
+      sessions.delete(key); broadcast(); return s;
     // ---- Cursor
     case 'afterFileEdit':
       s.status = 'working'; s.tools++; s.detail = `Edited ${shortPath(body.file_path)}`; break;
@@ -181,8 +201,22 @@ function applyEvent(source, body, meta) {
       if (body.message) s.detail = truncate(body.message, 120);
   }
 
-  if (s.status !== prev) onStatusChange(s, prev);
+  if (s.status !== prev || ev === 'PermissionRequest') onStatusChange(s, prev);
   broadcast();
+  return s;
+}
+
+function toolTitle(name) {
+  if (!name) return 'this action';
+  if (name.startsWith('mcp__')) return name.split('__').slice(1).join(' › ');
+  return { Bash: 'command', Edit: 'edit', MultiEdit: 'edit', Write: 'file write', WebFetch: 'web fetch' }[name] || name;
+}
+function permissionText(name, input = {}) {
+  if (name === 'Bash') return '$ ' + truncate(input.command, 400);
+  if (input.file_path) return `${describeTool(name, input)}`;
+  if (input.url) return input.url;
+  const j = JSON.stringify(input);
+  return j && j !== '{}' ? truncate(j, 300) : describeTool(name, input);
 }
 
 function onStatusChange(s, prev) {
@@ -243,6 +277,12 @@ function startServer() {
         res.writeHead(200, { 'content-type': 'image/png' }); res.end(img.toPNG());
       });
     }
+    if (process.env.AGENT_RADAR_DEBUG && req.method === 'GET' && req.url.startsWith('/debug/click') && win) {
+      const sel = new URL(req.url, 'http://x').searchParams.get('sel');
+      return win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(sel)})?.click() || !!document.querySelector(${JSON.stringify(sel)})`)
+        .then((ok) => { res.writeHead(ok ? 200 : 404); res.end(String(ok)); });
+    }
+    if (req.method === 'POST' && req.url.startsWith('/permission')) return; // handled below
     if (req.method !== 'POST' || !req.url.startsWith('/event')) {
       res.writeHead(404); return res.end();
     }
@@ -257,6 +297,27 @@ function startServer() {
       applyEvent(source, body, { bundleId: req.headers['x-bundle-id'] || null });
     });
   });
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.on('request', (req, res) => {
+    if (req.method !== 'POST' || !req.url.startsWith('/permission')) return;
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      let body = {};
+      try { body = JSON.parse(raw || '{}'); } catch {}
+      const source = req.headers['x-agent-source'] || 'claude';
+      const s = applyEvent(source, { ...body, hook_event_name: 'PermissionRequest' }, { bundleId: req.headers['x-bundle-id'] || null, actionable: true });
+      const key = s.key;
+      resolvePending(key, null); // only one outstanding request per session
+      pending.set(key, { res, id: s.ask.id });
+      // hook was killed (answered in terminal, or timed out) -> stop offering the buttons
+      res.on('close', () => {
+        const p = pending.get(key);
+        if (p && p.res === res) { pending.delete(key); if (s.ask && s.ask.id === p.id) { s.ask.actionable = false; broadcast(); } }
+      });
+    });
+  });
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       console.error(`Agent Radar: port ${PORT} is busy — is another copy running?`);
@@ -269,24 +330,22 @@ function startServer() {
 // ---------------------------------------------------------------- window
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  const x = settings.x ?? workArea.x + workArea.width - WIDTH - 16;
-  const y = settings.y ?? workArea.y + 16;
+  const x = settings.x ?? workArea.x + workArea.width - WIDTH;
+  const y = settings.y ?? workArea.y;
 
   win = new BrowserWindow({
     x, y, width: WIDTH, height: 64,
     frame: false,
     transparent: true,
     resizable: false,
-    hasShadow: true,
+    hasShadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,
     minimizable: false,
     maximizable: false,
     show: false,
-    vibrancy: 'hud',
-    visualEffectState: 'active',
-    roundedCorners: true,
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -315,10 +374,21 @@ function createWindow() {
 ipcMain.on('resize', (_e, height) => {
   if (!win) return;
   const [w] = win.getSize();
-  const h = Math.max(48, Math.min(560, Math.ceil(height)));
+  const h = Math.max(60, Math.min(640, Math.ceil(height)));
   win.setSize(w, h, false);
 });
 ipcMain.on('focus-session', (_e, key) => focusSession(key));
+ipcMain.on('decide', (_e, key, decision) => {
+  const s = sessions.get(key);
+  if (!resolvePending(key, decision)) return;
+  if (s) {
+    s.ask = null;
+    s.status = 'working';
+    s.detail = decision === 'allow' ? 'Approved from Agent Radar' : decision === 'deny' ? 'Denied from Agent Radar' : s.detail;
+    if (!decision) focusSession(key);
+  }
+  broadcast();
+});
 ipcMain.on('dismiss', (_e, key) => { sessions.delete(key); broadcast(); });
 ipcMain.on('clear-done', () => {
   for (const [k, s] of sessions) if (s.status === 'done' || s.status === 'idle') sessions.delete(k);
@@ -350,7 +420,7 @@ function buildMenu() {
     { label: visible ? 'Hide widget' : 'Show widget', click: () => (visible ? win.hide() : win.showInactive()) },
     { label: 'Reset position', click: () => {
       const { workArea } = screen.getPrimaryDisplay();
-      win.setPosition(workArea.x + workArea.width - WIDTH - 16, workArea.y + 16);
+      win.setPosition(workArea.x + workArea.width - WIDTH, workArea.y);
     } },
     { type: 'separator' },
     { label: 'Notify when a task finishes', type: 'checkbox', checked: settings.notifyDone,

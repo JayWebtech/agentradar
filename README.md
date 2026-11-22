@@ -8,6 +8,14 @@ A small always-on-top widget for macOS that shows what your coding agents are do
 
 Click any card (or the notification) to jump straight to the app that agent is running in, whether that's Terminal, iTerm, VS Code, Cursor, Antigravity or the Claude desktop app.
 
+### Approve / Deny from the widget (Claude Code)
+When Claude Code asks permission for a command, edit or tool, the card shows **Approve** and **Deny** buttons, so you can answer without switching windows.
+- **Open ↗** hands the question back to Claude Code so you can answer it there.
+- If you answer in Claude Code directly, the buttons go away automatically.
+- If you don't answer within 10 minutes, or the widget isn't running, Claude Code shows its usual permission prompt.
+
+Questions and plan approvals still need to be answered in the agent itself. For those, the card shows **Open to respond**.
+
 The widget floats above every window and every Space, including full-screen apps. Drag it anywhere and it remembers where you left it. Use the chevron to collapse it to a single line, and the `•••` button for options (sound, notify on finish, launch at login).
 
 ## Setup
@@ -29,7 +37,7 @@ Restart any Claude Code / Cursor sessions that are already open so they pick up 
 
 Each file is backed up to `*.agentradar-backup` before it's changed, and the installer only adds or removes its own entries. To undo everything, run `npm run uninstall-hooks`.
 
-The hook does nothing that would get in an agent's way. It posts to `127.0.0.1:47321` with a 1-second timeout, always exits 0, and stays silent when the widget isn't running.
+The hooks stay out of an agent's way. They post to `127.0.0.1:47321` with a 1-second timeout, always exit 0, and stay silent when the widget isn't running. The one exception is the permission hook, which waits for your Approve or Deny.
 
 ## Other agents / scripts
 

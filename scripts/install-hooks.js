@@ -27,7 +27,8 @@ function readJson(file, fallback) {
   }
 }
 function writeJson(file, data) {
-  if (fs.existsSync(file)) fs.copyFileSync(file, file + '.agentradar-backup');
+  // keep the very first backup: it's the copy from before Agent Radar touched anything
+  if (fs.existsSync(file) && !fs.existsSync(file + '.agentradar-backup')) fs.copyFileSync(file, file + '.agentradar-backup');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
 }
@@ -62,7 +63,10 @@ const CLAUDE_EVENTS = [
   }
   if (!UNINSTALL) {
     for (const ev of CLAUDE_EVENTS) {
-      const entry = { hooks: [{ type: 'command', command: `${q(hookPath)} claude`, timeout: 3 }] };
+      // PermissionRequest waits (up to 10 min) for Approve / Deny in the widget; everything else is fire-and-forget
+      const entry = ev === 'PermissionRequest'
+        ? { hooks: [{ type: 'command', command: `${q(hookPath)} claude-permission`, timeout: 600 }] }
+        : { hooks: [{ type: 'command', command: `${q(hookPath)} claude`, timeout: 3 }] };
       if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'].includes(ev)) entry.matcher = '*';
       (settings.hooks[ev] = settings.hooks[ev] || []).push(entry);
     }
